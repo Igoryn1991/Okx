@@ -16,8 +16,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
-      KEY: ${{ secrets.INSTABOX_API_KEY }}
-      MACHINE: ${{ secrets.INSTABOX_MACHINE_ID }}
+      KEY: ${{ secrets.INSTABOX_KEY }}
+      MACHINE: ${{ secrets.MACHINE_ID }}
     steps:
       - name: Check machine state
         id: state
