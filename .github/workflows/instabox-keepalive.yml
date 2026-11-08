@@ -1,0 +1,50 @@
+name: instabox-keepalive
+# Пингует машину febi-1991 каждые 5 минут: не даёт autoSuspend (30 мин),
+# растит maxRun, будит из suspend. Лог остаётся в истории Actions.
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'   # каждые 5 минут (GitHub может задерживать до ~15 мин)
+  workflow_dispatch: {}      # ручной запуск для проверки
+
+concurrency:
+  group: keepalive
+  cancel-in-progress: false
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      KEY: ${{ secrets.INSTABOX_API_KEY }}
+      MACHINE: ${{ secrets.INSTABOX_MACHINE_ID }}
+    steps:
+      - name: Check machine state
+        id: state
+        run: |
+          H=$(curl -sS -H "X-API-Key: $KEY" https://api.instabox.sh/v1/machines | head -c 4000)
+          ST=$(echo "$H" | jq -r --arg m "$MACHINE" '.machines[] | select(.id==$m) | .state')
+          CD=$(echo "$H" | jq -r --arg m "$MACHINE" '.machines[] | select(.id==$m) | .cooldownUntil // "null"')
+          RD=$(echo "$H" | jq -r --arg m "$MACHINE" '.machines[] | select(.id==$m) | .runtime.ready')
+          echo "state=$ST ready=$RD cooldown=$CD"
+          echo "state=$ST" >> "$GITHUB_OUTPUT"
+
+      - name: Wake if suspended
+        if: steps.state.outputs.state != 'running'
+        run: |
+          echo "waking..."
+          W=$(curl -sS -X POST -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
+               https://api.instabox.sh/v1/machines/$MACHINE/wake)
+          echo "$W" | head -c 400
+          sleep 8
+          curl -sS -H "X-API-Key: $KEY" https://api.instabox.sh/v1/machines | \
+            jq -r --arg m "$MACHINE" '.machines[] | select(.id==$m) | "after wake: state=\(.state) ready=\(.runtime.ready)"'
+
+      - name: Micro-exec ping (keeps maxRun growing)
+        if: steps.state.outputs.state == 'running'
+        run: |
+          # payload без BOM
+          printf '{"cmd":"date -u +%%H:%%M; uptime -p"}' > /tmp/p.json
+          R=$(curl -sS --max-time 60 -X POST -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
+               --data-binary @/tmp/p.json "https://api.instabox.sh/v1/machines/$MACHINE/exec")
+          echo "$R" | jq -r '.stdout // .stderr // .error // "no-output"' 2>/dev/null || echo "$R" | head -c 200
